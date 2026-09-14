@@ -9,12 +9,13 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode/utf16"
 
 	"github.com/cli/cli/v2/api"
-	"github.com/cli/cli/v2/internal/ghinstance"
 	"github.com/cli/cli/v2/internal/ghrepo"
+	"github.com/cli/cli/v2/internal/safeurl"
 	"github.com/cli/cli/v2/pkg/cmd/run/shared"
 )
 
@@ -38,23 +39,26 @@ type apiLogFetcher struct {
 }
 
 func (f *apiLogFetcher) GetLog() (io.ReadCloser, error) {
-	logURL := fmt.Sprintf("%srepos/%s/actions/jobs/%d/logs",
-		ghinstance.RESTPrefix(f.repo.RepoHost()), ghrepo.FullName(f.repo), f.jobID)
-
-	req, err := http.NewRequest("GET", logURL, nil)
+	logPath, err := safeurl.JoinPath("repos", f.repo.RepoOwner(), f.repo.RepoName(), "actions", "jobs", strconv.FormatInt(f.jobID, 10), "logs")
 	if err != nil {
 		return nil, err
 	}
 
-	resp, err := f.httpClient.Do(req)
+	// The response body is the log stream, which is handed to the caller rather than decoded.
+	// TODO(api-client-rollout)
+	// This line of code is part of a mechanical roll out of the api client.
+	// As a follow up, consider whether the api client can be injected to this call site, rather than constructed
+	resp, err := api.NewClientFromHTTP(f.httpClient).Request(f.repo.RepoHost(), http.MethodGet, logPath.String(), nil)
 	if err != nil {
+		if httpErr, ok := errors.AsType[api.HTTPError](err); ok && httpErr.StatusCode == http.StatusNotFound {
+			return nil, fmt.Errorf("log not found: %v", f.jobID)
+		}
 		return nil, err
 	}
 
-	if resp.StatusCode == 404 {
-		return nil, fmt.Errorf("log not found: %v", f.jobID)
-	} else if resp.StatusCode != 200 {
-		return nil, api.HandleHTTPError(resp)
+	if resp.StatusCode != http.StatusOK {
+		defer resp.Body.Close()
+		return nil, api.UnexpectedStatusError(resp)
 	}
 
 	return resp.Body, nil

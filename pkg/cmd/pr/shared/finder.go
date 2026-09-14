@@ -207,7 +207,6 @@ func (f *finder) Find(opts FindOptions) (*api.PullRequest, ghrepo.Interface, err
 
 	fields := set.NewStringSet()
 	fields.AddValues(opts.Fields)
-	numberFieldOnly := fields.Len() == 1 && fields.Contains("number")
 	fields.AddValues([]string{"id", "number"}) // for additional preload queries below
 
 	if fields.Contains("isInMergeQueue") || fields.Contains("isMergeQueueEnabled") {
@@ -219,6 +218,7 @@ func (f *finder) Find(opts FindOptions) (*api.PullRequest, ghrepo.Interface, err
 		if err != nil {
 			return nil, nil, err
 		}
+		// TODO mergeQueueCleanup
 		if !prFeatures.MergeQueue {
 			fields.Remove("isInMergeQueue")
 			fields.Remove("isMergeQueueEnabled")
@@ -247,11 +247,6 @@ func (f *finder) Find(opts FindOptions) (*api.PullRequest, ghrepo.Interface, err
 
 	var pr *api.PullRequest
 	if f.prNumber > 0 {
-		// If we have a PR number, let's look it up
-		if numberFieldOnly {
-			// avoid hitting the API if we already have all the information
-			return &api.PullRequest{Number: f.prNumber}, f.baseRefRepo, nil
-		}
 		pr, err = findByNumber(httpClient, f.baseRefRepo, f.prNumber, fields.ToSlice())
 		if err != nil {
 			return pr, f.baseRefRepo, err
@@ -349,7 +344,7 @@ func ParseFullReference(s string) (ghrepo.Interface, int, error) {
 
 	number, err := strconv.Atoi(m[3])
 	if err != nil {
-		return nil, 0, fmt.Errorf("invalid reference: %q", number)
+		return nil, 0, fmt.Errorf("invalid reference: %q; %w", s, err)
 	}
 
 	owner := m[1]
@@ -372,7 +367,7 @@ func findByNumber(httpClient *http.Client, repo ghrepo.Interface, number int, fi
 		}
 	}`, api.PullRequestGraphQL(fields))
 
-	variables := map[string]interface{}{
+	variables := map[string]any{
 		"owner":     repo.RepoOwner(),
 		"repo":      repo.RepoName(),
 		"pr_number": number,
@@ -415,7 +410,7 @@ func findForRefs(httpClient *http.Client, prRefs PRFindRefs, stateFilters, field
 		}
 	}`, api.PullRequestGraphQL(fieldSet.ToSlice()))
 
-	variables := map[string]interface{}{
+	variables := map[string]any{
 		"owner":       prRefs.BaseRepo().RepoOwner(),
 		"repo":        prRefs.BaseRepo().RepoName(),
 		"headRefName": prRefs.UnqualifiedHeadRef(),
@@ -459,7 +454,7 @@ func preloadPrReviews(httpClient *http.Client, repo ghrepo.Interface, pr *api.Pu
 		} `graphql:"node(id: $id)"`
 	}
 
-	variables := map[string]interface{}{
+	variables := map[string]any{
 		"id":        githubv4.ID(pr.ID),
 		"endCursor": githubv4.String(pr.Reviews.PageInfo.EndCursor),
 	}
@@ -499,7 +494,7 @@ func preloadPrComments(client *http.Client, repo ghrepo.Interface, pr *api.PullR
 		} `graphql:"node(id: $id)"`
 	}
 
-	variables := map[string]interface{}{
+	variables := map[string]any{
 		"id":        githubv4.ID(pr.ID),
 		"endCursor": githubv4.String(pr.Comments.PageInfo.EndCursor),
 	}
@@ -539,7 +534,7 @@ func preloadPrClosingIssuesReferences(client *http.Client, repo ghrepo.Interface
 		} `graphql:"node(id: $id)"`
 	}
 
-	variables := map[string]interface{}{
+	variables := map[string]any{
 		"id":        githubv4.ID(pr.ID),
 		"endCursor": githubv4.String(pr.ClosingIssuesReferences.PageInfo.EndCursor),
 	}
@@ -589,7 +584,7 @@ func preloadPrChecks(client *http.Client, repo ghrepo.Interface, pr *api.PullReq
 		}
 	}`, api.StatusCheckRollupGraphQLWithoutCountByState("$endCursor"))
 
-	variables := map[string]interface{}{
+	variables := map[string]any{
 		"id": pr.ID,
 	}
 

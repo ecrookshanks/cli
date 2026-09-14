@@ -105,7 +105,7 @@ func issueTransfer(httpClient *http.Client, issueID string, destRepo ghrepo.Inte
 		destinationRepoID = r.ID
 	} else {
 		apiClient := api.NewClientFromHTTP(httpClient)
-		r, err := api.GitHubRepo(apiClient, destRepo)
+		r, err := api.IssueRepoInfo(apiClient, destRepo)
 		if err != nil {
 			return "", err
 		}
@@ -120,7 +120,7 @@ func issueTransfer(httpClient *http.Client, issueID string, destRepo ghrepo.Inte
 		} `graphql:"transferIssue(input: $input)"`
 	}
 
-	variables := map[string]interface{}{
+	variables := map[string]any{
 		"input": githubv4.TransferIssueInput{
 			IssueID:      issueID,
 			RepositoryID: destinationRepoID,

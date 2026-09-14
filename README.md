@@ -1,14 +1,29 @@
 # GitHub CLI
 
+> [!IMPORTANT]
+> GitHub CLI's PGP signing key rotation for Linux package repositories is effective September 5, 2026; users experiencing package installation or update problems can find solutions in the [public announcement](https://github.com/cli/cli/issues/13118).
+
 `gh` is GitHub on the command line. It brings pull requests, issues, and other GitHub concepts to the terminal next to where you are already working with `git` and your code.
 
 ![screenshot of gh pr status](https://user-images.githubusercontent.com/98482/84171218-327e7a80-aa40-11ea-8cd1-5177fc2d0e72.png)
 
-GitHub CLI is supported for users on GitHub.com, GitHub Enterprise Cloud, and GitHub Enterprise Server 2.20+ with support for macOS, Windows, and Linux.
+GitHub CLI is supported for users on GitHub.com, GitHub Enterprise Cloud, and [supported GitHub Enterprise Server versions](https://docs.github.com/en/enterprise-server/admin/all-releases), with support for macOS, Windows, and Linux.
 
 ## Documentation
 
-For [installation options see below](#installation), for usage instructions [see the manual]( https://cli.github.com/manual/).
+For [installation options see below](#installation), for usage instructions [see the manual](https://cli.github.com/manual/).
+
+## Agent skills
+
+An [agent skill](https://agentskills.io) is available for driving `gh` from coding agents. Install or update it with the built-in `gh skill` command:
+
+```shell
+# Install the skill (user scope recommended)
+gh skill install cli/cli gh --scope user
+
+# Update the skill after a `gh` release
+gh skill update gh
+```
 
 ## Contributing
 
@@ -64,6 +79,8 @@ If a specific version is needed, your GitHub Actions workflow will need to insta
 For information on all pre-installed tools, see [`actions/runner-images`](https://github.com/actions/runner-images)
 
 ### Verification of binaries
+
+Starting with v2.93.0, releases of `gh` are published as immutable releases. For more information, see [Immutable releases](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases).
 
 Since version 2.50.0, `gh` has been producing [Build Provenance Attestation](https://github.blog/changelog/2024-06-25-artifact-attestations-is-generally-available/), enabling a cryptographically verifiable paper-trail back to the origin GitHub repository, git revision, and build instructions used. The build provenance attestations are signed and rely on Public Good [Sigstore](https://www.sigstore.dev/) for PKI.
 

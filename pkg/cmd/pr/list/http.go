@@ -70,13 +70,15 @@ func searchPullRequests(httpClient *http.Client, detector fd.Detector, repo ghre
 			}
 		}`
 
-	variables := map[string]interface{}{}
+	variables := map[string]any{}
 
 	filters.Repo = ghrepo.FullName(repo)
 	filters.Entity = "pr"
 
+	// TODO advancedIssueSearchCleanup
 	if features.AdvancedIssueSearchAPI {
 		variables["q"] = prShared.SearchQueryBuild(filters, true)
+		// TODO advancedIssueSearchCleanup
 		if features.AdvancedIssueSearchAPIOptIn {
 			variables["type"] = "ISSUE_ADVANCED"
 		} else {
@@ -125,11 +127,4 @@ loop:
 	}
 
 	return &res, nil
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

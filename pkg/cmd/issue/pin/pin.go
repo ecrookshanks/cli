@@ -33,7 +33,7 @@ func NewCmdPin(f *cmdutil.Factory, runF func(*PinOptions) error) *cobra.Command 
 
 	cmd := &cobra.Command{
 		Use:   "pin {<number> | <url>}",
-		Short: "Pin a issue",
+		Short: "Pin an issue",
 		Long: heredoc.Doc(`
 			Pin an issue to a repository.
 
@@ -121,7 +121,7 @@ func pinIssue(httpClient *http.Client, repo ghrepo.Interface, issue *api.Issue) 
 		} `graphql:"pinIssue(input: $input)"`
 	}
 
-	variables := map[string]interface{}{
+	variables := map[string]any{
 		"input": githubv4.PinIssueInput{
 			IssueID: issue.ID,
 		},

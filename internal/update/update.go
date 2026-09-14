@@ -13,6 +13,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cli/cli/v2/api"
+	"github.com/cli/cli/v2/internal/ci"
+	"github.com/cli/cli/v2/internal/safeurl"
 	"github.com/cli/cli/v2/pkg/extensions"
 	"github.com/hashicorp/go-version"
 	"github.com/mattn/go-isatty"
@@ -42,7 +45,7 @@ func ShouldCheckForExtensionUpdate() bool {
 	if os.Getenv("CODESPACES") != "" {
 		return false
 	}
-	return !IsCI() && IsTerminal(os.Stdout) && IsTerminal(os.Stderr)
+	return !ci.IsCI() && IsTerminal(os.Stdout) && IsTerminal(os.Stderr)
 }
 
 // CheckForExtensionUpdate checks whether an update exists for a specific extension based on extension type and recency of last check within past 24 hours.
@@ -83,7 +86,7 @@ func ShouldCheckForUpdate() bool {
 	if os.Getenv("CODESPACES") != "" {
 		return false
 	}
-	return !IsCI() && IsTerminal(os.Stdout) && IsTerminal(os.Stderr)
+	return !ci.IsCI() && IsTerminal(os.Stdout) && IsTerminal(os.Stderr)
 }
 
 // CheckForUpdate checks whether an update exists for the GitHub CLI based on recency of last check within past 24 hours.
@@ -111,11 +114,20 @@ func CheckForUpdate(ctx context.Context, client *http.Client, stateFilePath, rep
 }
 
 func getLatestReleaseInfo(ctx context.Context, client *http.Client, repo string) (*ReleaseInfo, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", repo), nil)
+	owner, name, err := safeurl.RepoPartsFromNWO(repo)
 	if err != nil {
 		return nil, err
 	}
-	res, err := client.Do(req)
+	u, err := safeurl.JoinPathWithHostPrefix("https://api.github.com", "repos", owner, name, "releases", "latest")
+	if err != nil {
+		return nil, err
+	}
+	// The URL stays absolute on purpose: CLI releases live on github.com regardless of the
+	// host the user has configured, so this must not be rewritten to their API host.
+	// TODO(api-client-rollout)
+	// This line of code is part of a mechanical roll out of the api client.
+	// As a follow up, consider whether the api client can be injected to this call site, rather than constructed
+	res, err := api.NewClientFromHTTP(client).RequestWithContext(ctx, "github.com", http.MethodGet, u.String(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -124,7 +136,7 @@ func getLatestReleaseInfo(ctx context.Context, client *http.Client, repo string)
 		res.Body.Close()
 	}()
 	if res.StatusCode != 200 {
-		return nil, fmt.Errorf("unexpected HTTP %d", res.StatusCode)
+		return nil, api.UnexpectedStatusError(res)
 	}
 	dec := json.NewDecoder(res.Body)
 	var latestRelease ReleaseInfo
@@ -181,12 +193,4 @@ func versionGreaterThan(v, w string) bool {
 // IsTerminal determines if a file descriptor is an interactive terminal / TTY.
 func IsTerminal(f *os.File) bool {
 	return isatty.IsTerminal(f.Fd()) || isatty.IsCygwinTerminal(f.Fd())
-}
-
-// IsCI determines if the current execution context is within a known CI/CD system.
-// This is based on https://github.com/watson/ci-info/blob/HEAD/index.js.
-func IsCI() bool {
-	return os.Getenv("CI") != "" || // GitHub Actions, Travis CI, CircleCI, Cirrus CI, GitLab CI, AppVeyor, CodeShip, dsari
-		os.Getenv("BUILD_NUMBER") != "" || // Jenkins, TeamCity
-		os.Getenv("RUN_ID") != "" // TaskCluster, dsari
 }

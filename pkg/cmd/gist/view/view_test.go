@@ -148,6 +148,100 @@ func Test_viewRun(t *testing.T) {
 			wantOut: "bwhiizzzbwhuiiizzzz\n",
 		},
 		{
+			name:  "truncated raw file with escape sequences is sanitized on a terminal",
+			isTTY: true,
+			opts: &ViewOptions{
+				Selector:  "1234",
+				ListFiles: false,
+			},
+			mockGist: &shared.Gist{
+				Files: map[string]*shared.GistFile{
+					"escaped.txt": {
+						Type:      "text/plain",
+						Content:   "",
+						Truncated: true,
+						RawURL:    "https://gist.githubusercontent.com/user/1234/raw/escaped.txt",
+					},
+				},
+			},
+			wantOut: "danger^[[31m\n",
+		},
+		{
+			name:  "piped truncated raw file with escape sequences is refused",
+			isTTY: false,
+			opts: &ViewOptions{
+				Selector:  "1234",
+				ListFiles: false,
+			},
+			mockGist: &shared.Gist{
+				Files: map[string]*shared.GistFile{
+					"escaped.txt": {
+						Type:      "text/plain",
+						Content:   "",
+						Truncated: true,
+						RawURL:    "https://gist.githubusercontent.com/user/1234/raw/escaped.txt",
+					},
+				},
+			},
+			wantErr: "gist file contains terminal escape sequences; pass --allow-escape-sequences to view it anyway",
+		},
+		{
+			name:  "piped truncated clean file passes through raw",
+			isTTY: false,
+			opts: &ViewOptions{
+				Selector:  "1234",
+				ListFiles: false,
+			},
+			mockGist: &shared.Gist{
+				Files: map[string]*shared.GistFile{
+					"clean-truncated.txt": {
+						Type:      "text/plain",
+						Content:   "",
+						Truncated: true,
+						RawURL:    "https://gist.githubusercontent.com/user/1234/raw/clean-truncated.txt",
+					},
+				},
+			},
+			wantOut: "clean text\n",
+		},
+		{
+			name:  "piped truncated file with escape sequences passes through with --allow-escape-sequences",
+			isTTY: false,
+			opts: &ViewOptions{
+				Selector:             "1234",
+				ListFiles:            false,
+				AllowEscapeSequences: true,
+			},
+			mockGist: &shared.Gist{
+				Files: map[string]*shared.GistFile{
+					"escaped.txt": {
+						Type:      "text/plain",
+						Content:   "",
+						Truncated: true,
+						RawURL:    "https://gist.githubusercontent.com/user/1234/raw/escaped.txt",
+					},
+				},
+			},
+			wantOut: "danger\x1b[31m\n",
+		},
+		{
+			name:  "piped inline file escapes are already neutralized by the JSON transport",
+			isTTY: false,
+			opts: &ViewOptions{
+				Selector:  "1234",
+				ListFiles: false,
+			},
+			mockGist: &shared.Gist{
+				Files: map[string]*shared.GistFile{
+					"inline-escaped.txt": {
+						Type:    "text/plain",
+						Content: "danger\x1b[31m",
+					},
+				},
+			},
+			wantOut: "danger^[[31m\n",
+		},
+		{
 			name:  "one file, no ID supplied",
 			isTTY: true,
 			opts: &ViewOptions{
@@ -344,6 +438,96 @@ func Test_viewRun(t *testing.T) {
 			},
 			wantOut: "cicada.txt\nfoo.md\n",
 		},
+		{
+			name:  "truncated file with raw and filename",
+			isTTY: true,
+			opts: &ViewOptions{
+				Selector: "1234",
+				Raw:      true,
+				Filename: "large.txt",
+			},
+			mockGist: &shared.Gist{
+				Files: map[string]*shared.GistFile{
+					"large.txt": {
+						Content:   "This is truncated content...",
+						Type:      "text/plain",
+						Truncated: true,
+						RawURL:    "https://gist.githubusercontent.com/user/1234/raw/large.txt",
+					},
+				},
+			},
+			wantOut: "This is the full content of the large file retrieved from raw URL\n",
+		},
+		{
+			name:  "truncated file without raw flag",
+			isTTY: true,
+			opts: &ViewOptions{
+				Selector: "1234",
+				Raw:      false,
+				Filename: "large.txt",
+			},
+			mockGist: &shared.Gist{
+				Files: map[string]*shared.GistFile{
+					"large.txt": {
+						Content:   "This is truncated content...",
+						Type:      "text/plain",
+						Truncated: true,
+						RawURL:    "https://gist.githubusercontent.com/user/1234/raw/large.txt",
+					},
+				},
+			},
+			wantOut: "This is the full content of the large file retrieved from raw URL\n",
+		},
+		{
+			name:  "multiple files with one truncated",
+			isTTY: true,
+			opts: &ViewOptions{
+				Selector: "1234",
+				Raw:      true,
+			},
+			mockGist: &shared.Gist{
+				Description: "Mixed files",
+				Files: map[string]*shared.GistFile{
+					"normal.txt": {
+						Content: "normal content",
+						Type:    "text/plain",
+					},
+					"large.txt": {
+						Content:   "This is truncated content...",
+						Type:      "text/plain",
+						Truncated: true,
+						RawURL:    "https://gist.githubusercontent.com/user/1234/raw/large.txt",
+					},
+				},
+			},
+			wantOut: "Mixed files\n\nlarge.txt\n\nThis is the full content of the large file retrieved from raw URL\n\nnormal.txt\n\nnormal content\n",
+		},
+		{
+			name:  "multiple files with subsequent files truncated as empty",
+			isTTY: true,
+			opts: &ViewOptions{
+				Selector: "1234",
+				Raw:      true,
+			},
+			mockGist: &shared.Gist{
+				Description: "Large gist with multiple files",
+				Files: map[string]*shared.GistFile{
+					"large.txt": {
+						Content:   "This is truncated content...",
+						Type:      "text/plain",
+						Truncated: true,
+						RawURL:    "https://gist.githubusercontent.com/user/1234/raw/large.txt",
+					},
+					"also-truncated.txt": {
+						Type:      "text/plain",
+						Content:   "",   // Empty because GitHub truncates subsequent files
+						Truncated: true, // Subsequent files are also marked as truncated
+						RawURL:    "https://gist.githubusercontent.com/user/1234/raw/also-truncated.txt",
+					},
+				},
+			},
+			wantOut: "Large gist with multiple files\n\nalso-truncated.txt\n\nThis is the full content of the also-truncated file retrieved from raw URL\n\nlarge.txt\n\nThis is the full content of the large file retrieved from raw URL\n",
+		},
 	}
 
 	for _, tt := range tests {
@@ -354,6 +538,24 @@ func Test_viewRun(t *testing.T) {
 		} else {
 			reg.Register(httpmock.REST("GET", "gists/1234"),
 				httpmock.JSONResponse(tt.mockGist))
+
+			for filename, file := range tt.mockGist.Files {
+				if file.Truncated && file.RawURL != "" {
+					if filename == "large.txt" {
+						reg.Register(httpmock.REST("GET", "user/1234/raw/large.txt"),
+							httpmock.StringResponse("This is the full content of the large file retrieved from raw URL"))
+					} else if filename == "also-truncated.txt" {
+						reg.Register(httpmock.REST("GET", "user/1234/raw/also-truncated.txt"),
+							httpmock.StringResponse("This is the full content of the also-truncated file retrieved from raw URL"))
+					} else if filename == "escaped.txt" {
+						reg.Register(httpmock.REST("GET", "user/1234/raw/escaped.txt"),
+							httpmock.StringResponse("danger\x1b[31m"))
+					} else if filename == "clean-truncated.txt" {
+						reg.Register(httpmock.REST("GET", "user/1234/raw/clean-truncated.txt"),
+							httpmock.StringResponse("clean text"))
+					}
+				}
+			}
 		}
 
 		if tt.opts == nil {
@@ -391,7 +593,7 @@ func Test_viewRun(t *testing.T) {
 		}
 
 		tt.opts.Config = func() (gh.Config, error) {
-			return config.NewBlankConfig(), nil
+			return config.NewMockConfig(), nil
 		}
 
 		ios, _, stdout, _ := iostreams.Test()

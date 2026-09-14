@@ -4,6 +4,9 @@ import (
 	ctx "context"
 	"fmt"
 	"net/http"
+	"net/url"
+	"path/filepath"
+	"strings"
 
 	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/cli/v2/api"
@@ -12,6 +15,7 @@ import (
 	"github.com/cli/cli/v2/internal/ghrepo"
 	"github.com/cli/cli/v2/internal/tableprinter"
 	"github.com/cli/cli/v2/pkg/cmd/issue/shared"
+	prShared "github.com/cli/cli/v2/pkg/cmd/pr/shared"
 	"github.com/cli/cli/v2/pkg/cmdutil"
 	"github.com/cli/cli/v2/pkg/iostreams"
 	"github.com/spf13/cobra"
@@ -30,6 +34,7 @@ type DevelopOptions struct {
 	BaseBranch  string
 	Checkout    bool
 	List        bool
+	Worktree    string
 }
 
 func NewCmdDevelop(f *cmdutil.Factory, runF func(*DevelopOptions) error) *cobra.Command {
@@ -61,8 +66,11 @@ func NewCmdDevelop(f *cmdutil.Factory, runF func(*DevelopOptions) error) *cobra.
 			# Create a branch for issue 123 based on the my-feature branch
 			$ gh issue develop 123 --base my-feature
 
-			# Create a branch for issue 123 and checkout it out
+			# Create a branch for issue 123 and check it out
 			$ gh issue develop 123 --checkout
+
+			# Create a branch for issue 123 and check it out in a worktree
+			$ gh issue develop 123 --checkout --worktree /path/to/wt-feature
 
 			# Create a branch in repo monalisa/cli for issue 123 in repo cli/cli
 			$ gh issue develop 123 --repo cli/cli --branch-repo monalisa/cli
@@ -89,6 +97,10 @@ func NewCmdDevelop(f *cmdutil.Factory, runF func(*DevelopOptions) error) *cobra.
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if cmd.Flags().Changed("worktree") && opts.Worktree == "" {
+				return cmdutil.FlagErrorf("--worktree cannot be blank")
+			}
+
 			issueNumber, baseRepo, err := shared.ParseIssueFromArg(args[0])
 			if err != nil {
 				return err
@@ -118,6 +130,18 @@ func NewCmdDevelop(f *cmdutil.Factory, runF func(*DevelopOptions) error) *cobra.
 			if err := cmdutil.MutuallyExclusive("specify only one of `--list` or `--name`", opts.List, opts.Name != ""); err != nil {
 				return err
 			}
+			if err := cmdutil.MutuallyExclusive("specify only one of `--list` or `--worktree`", opts.List, opts.Worktree != ""); err != nil {
+				return err
+			}
+			if opts.Worktree != "" && !opts.Checkout {
+				return cmdutil.FlagErrorf("--worktree requires --checkout")
+			}
+			if opts.Worktree != "" {
+				opts.Worktree, err = filepath.Abs(opts.Worktree)
+				if err != nil {
+					return err
+				}
+			}
 			if runF != nil {
 				return runF(opts)
 			}
@@ -131,6 +155,7 @@ func NewCmdDevelop(f *cmdutil.Factory, runF func(*DevelopOptions) error) *cobra.
 	fl.BoolVarP(&opts.Checkout, "checkout", "c", false, "Checkout the branch after creating it")
 	fl.BoolVarP(&opts.List, "list", "l", false, "List linked branches for the issue")
 	fl.StringVarP(&opts.Name, "name", "n", "", "Name of the branch to create")
+	fl.StringVar(&opts.Worktree, "worktree", "", "Check out the branch into a worktree at the given `path`")
 
 	var issueRepoSelector string
 	fl.StringVarP(&issueRepoSelector, "issue-repo", "i", "", "Name or URL of the issue's repository")
@@ -150,21 +175,22 @@ func developRun(opts *DevelopOptions) error {
 		return err
 	}
 
-	opts.IO.StartProgressIndicator()
+	opts.IO.StartProgressIndicatorWithLabel(fmt.Sprintf("Fetching issue #%d", opts.IssueNumber))
+	defer opts.IO.StopProgressIndicator()
+
 	issue, err := shared.FindIssueOrPR(httpClient, baseRepo, opts.IssueNumber, []string{"id", "number"})
-	opts.IO.StopProgressIndicator()
 	if err != nil {
 		return err
 	}
 
 	apiClient := api.NewClientFromHTTP(httpClient)
 
-	opts.IO.StartProgressIndicator()
+	opts.IO.StartProgressIndicatorWithLabel("Checking linked branch support")
 	err = api.CheckLinkedBranchFeature(apiClient, baseRepo.RepoHost())
-	opts.IO.StopProgressIndicator()
 	if err != nil {
 		return err
 	}
+	opts.IO.StopProgressIndicator()
 
 	if opts.List {
 		return developRunList(opts, apiClient, baseRepo, issue)
@@ -174,7 +200,6 @@ func developRun(opts *DevelopOptions) error {
 
 func developRunCreate(opts *DevelopOptions, apiClient *api.Client, issueRepo ghrepo.Interface, issue *api.Issue) error {
 	branchRepo := issueRepo
-	var repoID string
 	if opts.BranchRepo != "" {
 		var err error
 		branchRepo, err = ghrepo.FromFullName(opts.BranchRepo)
@@ -183,40 +208,123 @@ func developRunCreate(opts *DevelopOptions, apiClient *api.Client, issueRepo ghr
 		}
 	}
 
-	opts.IO.StartProgressIndicator()
-	repoID, branchID, err := api.FindRepoBranchID(apiClient, branchRepo, opts.BaseBranch)
-	opts.IO.StopProgressIndicator()
-	if err != nil {
-		return err
+	var worktreeTarget prShared.WorktreeTarget
+	if opts.Worktree != "" {
+		var err error
+		worktreeTarget, err = prShared.ResolveWorktreeTarget(opts.GitClient, opts.Worktree)
+		if err != nil {
+			return err
+		}
 	}
 
-	opts.IO.StartProgressIndicator()
-	branchName, err := api.CreateLinkedBranch(apiClient, branchRepo.RepoHost(), repoID, issue.ID, branchID, opts.Name)
+	opts.IO.StartProgressIndicatorWithLabel("Preparing linked branch")
+	defer opts.IO.StopProgressIndicator()
+
+	branchName := ""
+	reusedExisting := false
+	if opts.Name != "" {
+		opts.IO.StartProgressIndicatorWithLabel("Checking existing linked branches")
+		branches, err := api.ListLinkedBranches(apiClient, issueRepo, issue.Number)
+		if err != nil {
+			return err
+		}
+		branchName = findExistingLinkedBranchName(branches, branchRepo, opts.Name)
+		reusedExisting = branchName != ""
+	}
+
+	repoID := ""
+	branchID := ""
+	baseValidated := false
+	if opts.BaseBranch != "" {
+		opts.IO.StartProgressIndicatorWithLabel(fmt.Sprintf("Validating base branch %q", opts.BaseBranch))
+		foundRepoID, foundBranchID, err := api.FindRepoBranchID(apiClient, branchRepo, opts.BaseBranch)
+		if err != nil {
+			return err
+		}
+		repoID = foundRepoID
+		branchID = foundBranchID
+		baseValidated = true
+	}
+
+	if branchName == "" {
+		if !baseValidated {
+			opts.IO.StartProgressIndicatorWithLabel("Resolving base branch")
+			foundRepoID, foundBranchID, err := api.FindRepoBranchID(apiClient, branchRepo, opts.BaseBranch)
+			if err != nil {
+				return err
+			}
+			repoID = foundRepoID
+			branchID = foundBranchID
+		}
+
+		opts.IO.StartProgressIndicatorWithLabel("Creating linked branch")
+		createdBranchName, err := api.CreateLinkedBranch(apiClient, branchRepo.RepoHost(), repoID, issue.ID, branchID, opts.Name)
+		if err != nil {
+			return err
+		}
+		branchName = createdBranchName
+	}
+
+	if branchName == "" {
+		return fmt.Errorf("failed to create linked branch: API returned empty branch name")
+	}
+
 	opts.IO.StopProgressIndicator()
-	if err != nil {
-		return err
+
+	if reusedExisting && opts.IO.IsStdoutTTY() {
+		fmt.Fprintf(opts.IO.ErrOut, "Using existing linked branch %q\n", branchName)
 	}
 
 	// Remember which branch to target when creating a PR.
 	if opts.BaseBranch != "" {
-		err = opts.GitClient.SetBranchConfig(ctx.Background(), branchName, git.MergeBaseConfig, opts.BaseBranch)
-		if err != nil {
+		if err := opts.GitClient.SetBranchConfig(ctx.Background(), branchName, git.MergeBaseConfig, opts.BaseBranch); err != nil {
 			return err
 		}
 	}
 
 	fmt.Fprintf(opts.IO.Out, "%s/%s/tree/%s\n", branchRepo.RepoHost(), ghrepo.FullName(branchRepo), branchName)
 
-	return checkoutBranch(opts, branchRepo, branchName)
+	return checkoutBranch(opts, branchRepo, branchName, worktreeTarget)
+}
+
+func findExistingLinkedBranchName(branches []api.LinkedBranch, branchRepo ghrepo.Interface, branchName string) string {
+	for _, branch := range branches {
+		if branch.BranchName != branchName {
+			continue
+		}
+		linkedRepo, err := linkedBranchRepoFromURL(branch.URL)
+		if err != nil {
+			continue
+		}
+		if ghrepo.IsSame(linkedRepo, branchRepo) {
+			return branch.BranchName
+		}
+	}
+	return ""
+}
+
+func linkedBranchRepoFromURL(branchURL string) (ghrepo.Interface, error) {
+	u, err := url.Parse(branchURL)
+	if err != nil {
+		return nil, err
+	}
+	pathParts := strings.SplitN(strings.Trim(u.Path, "/"), "/", 3)
+	if len(pathParts) < 2 {
+		return nil, fmt.Errorf("invalid linked branch URL: %q", branchURL)
+	}
+	u.Path = "/" + strings.Join(pathParts[0:2], "/")
+	return ghrepo.FromURL(u)
 }
 
 func developRunList(opts *DevelopOptions, apiClient *api.Client, issueRepo ghrepo.Interface, issue *api.Issue) error {
-	opts.IO.StartProgressIndicator()
+	opts.IO.StartProgressIndicatorWithLabel("Fetching linked branches")
+	defer opts.IO.StopProgressIndicator()
+
 	branches, err := api.ListLinkedBranches(apiClient, issueRepo, issue.Number)
-	opts.IO.StopProgressIndicator()
 	if err != nil {
 		return err
 	}
+	opts.IO.StopProgressIndicator()
 
 	if len(branches) == 0 {
 		return cmdutil.NewNoResultsError(fmt.Sprintf("no linked branches found for %s#%d", ghrepo.FullName(issueRepo), issue.Number))
@@ -242,7 +350,7 @@ func printLinkedBranches(io *iostreams.IOStreams, branches []api.LinkedBranch) {
 	_ = table.Render()
 }
 
-func checkoutBranch(opts *DevelopOptions, branchRepo ghrepo.Interface, checkoutBranch string) (err error) {
+func checkoutBranch(opts *DevelopOptions, branchRepo ghrepo.Interface, checkoutBranch string, worktreeTarget prShared.WorktreeTarget) (err error) {
 	remotes, err := opts.Remotes()
 	if err != nil {
 		// If the user specified the branch to be checked out and no remotes are found
@@ -276,6 +384,24 @@ func checkoutBranch(opts *DevelopOptions, branchRepo ghrepo.Interface, checkoutB
 		return nil
 	}
 
+	if opts.Worktree != "" {
+		commands, branchExists := prShared.WorktreeCheckoutCommands(
+			gc,
+			worktreeTarget,
+			checkoutBranch,
+			fmt.Sprintf("%s/%s", baseRemote.Name, checkoutBranch),
+		)
+		if err := runGitCommands(gc, commands); err != nil {
+			return err
+		}
+		if branchExists {
+			if err := gc.Pull(ctx.Background(), baseRemote.Name, checkoutBranch, git.WithRepoDir(opts.Worktree)); err != nil {
+				_, _ = fmt.Fprintf(opts.IO.ErrOut, "%s warning: not possible to fast-forward to: %q\n", opts.IO.ColorScheme().WarningIcon(), checkoutBranch)
+			}
+		}
+		return nil
+	}
+
 	if gc.HasLocalBranch(ctx.Background(), checkoutBranch) {
 		if err := gc.CheckoutBranch(ctx.Background(), checkoutBranch); err != nil {
 			return err
@@ -290,5 +416,18 @@ func checkoutBranch(opts *DevelopOptions, branchRepo ghrepo.Interface, checkoutB
 		}
 	}
 
+	return nil
+}
+
+func runGitCommands(client *git.Client, commands [][]string) error {
+	for _, args := range commands {
+		cmd, err := client.Command(ctx.Background(), args...)
+		if err != nil {
+			return err
+		}
+		if _, err := cmd.Output(); err != nil {
+			return err
+		}
+	}
 	return nil
 }

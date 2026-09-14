@@ -9,8 +9,6 @@ import (
 
 	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/cli/v2/api"
-
-	"github.com/cli/cli/v2/internal/config"
 	"github.com/cli/cli/v2/pkg/httpmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -118,8 +116,8 @@ func TestListLatestSessionsForViewer(t *testing.T) {
 							}
 						}`,
 						sampleDateString,
-					), func(q string, vars map[string]interface{}) {
-						assert.Equal(t, []interface{}{"PR_kwDNA-jNB9A", "U_kgAB"}, vars["ids"])
+					), func(q string, vars map[string]any) {
+						assert.Equal(t, []any{"PR_kwDNA-jNB9A", "U_kgAB"}, vars["ids"])
 					}),
 				)
 			},
@@ -213,8 +211,8 @@ func TestListLatestSessionsForViewer(t *testing.T) {
 							}
 						}`,
 						sampleDateString,
-					), func(q string, vars map[string]interface{}) {
-						assert.Equal(t, []interface{}{"U_kgAB"}, vars["ids"])
+					), func(q string, vars map[string]any) {
+						assert.Equal(t, []any{"U_kgAB"}, vars["ids"])
 					}),
 				)
 			},
@@ -357,8 +355,8 @@ func TestListLatestSessionsForViewer(t *testing.T) {
 							}
 						}`,
 						sampleDateString,
-					), func(q string, vars map[string]interface{}) {
-						assert.Equal(t, []interface{}{"PR_kwDNA-jNB9A", "PR_kwDNA-jNB9E", "U_kgAB"}, vars["ids"])
+					), func(q string, vars map[string]any) {
+						assert.Equal(t, []any{"PR_kwDNA-jNB9A", "PR_kwDNA-jNB9E", "U_kgAB"}, vars["ids"])
 					}),
 				)
 			},
@@ -587,9 +585,9 @@ func TestListLatestSessionsForViewer(t *testing.T) {
 							}
 						}`,
 						sampleDateString,
-					), func(q string, vars map[string]interface{}) {
+					), func(q string, vars map[string]any) {
 						// Expected encoded node IDs for resource IDs 3000,3001,3002 and user octocat
-						assert.Equal(t, []interface{}{"PR_kwDNA-jNC7g", "PR_kwDNA-jNC7k", "PR_kwDNA-jNC7o", "U_kgAB"}, vars["ids"])
+						assert.Equal(t, []any{"PR_kwDNA-jNC7g", "PR_kwDNA-jNC7k", "PR_kwDNA-jNC7o", "U_kgAB"}, vars["ids"])
 					}),
 				)
 			},
@@ -809,9 +807,9 @@ func TestListLatestSessionsForViewer(t *testing.T) {
 							}
 						}`,
 						sampleDateString,
-					), func(q string, vars map[string]interface{}) {
+					), func(q string, vars map[string]any) {
 						// Expected encoded node IDs for resource IDs 3000 and user octocat
-						assert.Equal(t, []interface{}{"PR_kwDNA-jNC7g", "U_kgAB"}, vars["ids"])
+						assert.Equal(t, []any{"PR_kwDNA-jNC7g", "U_kgAB"}, vars["ids"])
 					}),
 				)
 			},
@@ -945,9 +943,9 @@ func TestListLatestSessionsForViewer(t *testing.T) {
 							}
 						}`,
 						sampleDateString,
-					), func(q string, vars map[string]interface{}) {
+					), func(q string, vars map[string]any) {
 						// Expected encoded node IDs for resource IDs 3000 and user octocat
-						assert.Equal(t, []interface{}{"PR_kwDNA-jNC7g", "U_kgAB"}, vars["ids"])
+						assert.Equal(t, []any{"PR_kwDNA-jNC7g", "U_kgAB"}, vars["ids"])
 					}),
 				)
 			},
@@ -1054,9 +1052,9 @@ func TestListLatestSessionsForViewer(t *testing.T) {
 							}
 						}`,
 						sampleDateString,
-					), func(q string, vars map[string]interface{}) {
+					), func(q string, vars map[string]any) {
 						// Expected encoded node IDs for resource IDs 3000 and user octocat
-						assert.Equal(t, []interface{}{"PR_kwDNA-jNC7g", "U_kgAB"}, vars["ids"])
+						assert.Equal(t, []any{"PR_kwDNA-jNC7g", "U_kgAB"}, vars["ids"])
 					}),
 				)
 			},
@@ -1163,8 +1161,7 @@ func TestListLatestSessionsForViewer(t *testing.T) {
 
 			httpClient := &http.Client{Transport: reg}
 
-			cfg := config.NewBlankConfig()
-			capiClient := NewCAPIClient(httpClient, cfg.Authentication())
+			capiClient := NewCAPIClient(httpClient, "", "github.com", "https://api.githubcopilot.com")
 
 			if tt.perPage != 0 {
 				last := defaultSessionsPerPage
@@ -1298,8 +1295,8 @@ func TestListSessionsByResourceID(t *testing.T) {
 							}
 						}`,
 						sampleDateString,
-					), func(q string, vars map[string]interface{}) {
-						assert.Equal(t, []interface{}{"PR_kwDNA-jNB9A", "U_kgAB"}, vars["ids"])
+					), func(q string, vars map[string]any) {
+						assert.Equal(t, []any{"PR_kwDNA-jNB9A", "U_kgAB"}, vars["ids"])
 					}),
 				)
 			},
@@ -1421,8 +1418,8 @@ func TestListSessionsByResourceID(t *testing.T) {
 							}
 						}`,
 						sampleDateString,
-					), func(q string, vars map[string]interface{}) {
-						assert.Equal(t, []interface{}{"PR_kwDNA-jNB9A", "U_kgAB"}, vars["ids"])
+					), func(q string, vars map[string]any) {
+						assert.Equal(t, []any{"PR_kwDNA-jNB9A", "U_kgAB"}, vars["ids"])
 					}),
 				)
 			},
@@ -1543,8 +1540,7 @@ func TestListSessionsByResourceID(t *testing.T) {
 
 			httpClient := &http.Client{Transport: reg}
 
-			cfg := config.NewBlankConfig()
-			capiClient := NewCAPIClient(httpClient, cfg.Authentication())
+			capiClient := NewCAPIClient(httpClient, "", "github.com", "https://api.githubcopilot.com")
 
 			if tt.perPage != 0 {
 				last := defaultSessionsPerPage
@@ -1674,8 +1670,8 @@ func TestGetSession(t *testing.T) {
 							}
 						}`,
 						sampleDateString,
-					), func(q string, vars map[string]interface{}) {
-						assert.Equal(t, []interface{}{"PR_kwDNA-jNB9A", "U_kgAB"}, vars["ids"])
+					), func(q string, vars map[string]any) {
+						assert.Equal(t, []any{"PR_kwDNA-jNB9A", "U_kgAB"}, vars["ids"])
 					}),
 				)
 			},
@@ -1755,8 +1751,8 @@ func TestGetSession(t *testing.T) {
 							}
 						}`,
 						sampleDateString,
-					), func(q string, vars map[string]interface{}) {
-						assert.Equal(t, []interface{}{"U_kgAB"}, vars["ids"])
+					), func(q string, vars map[string]any) {
+						assert.Equal(t, []any{"U_kgAB"}, vars["ids"])
 					}),
 				)
 			},
@@ -1823,8 +1819,7 @@ func TestGetSession(t *testing.T) {
 
 			httpClient := &http.Client{Transport: reg}
 
-			cfg := config.NewBlankConfig()
-			capiClient := NewCAPIClient(httpClient, cfg.Authentication())
+			capiClient := NewCAPIClient(httpClient, "", "github.com", "https://api.githubcopilot.com")
 
 			session, err := capiClient.GetSession(context.Background(), "some-uuid")
 
@@ -1878,7 +1873,7 @@ func TestGetPullRequestDatabaseID(t *testing.T) {
 			httpStubs: func(t *testing.T, reg *httpmock.Registry) {
 				reg.Register(
 					httpmock.WithHost(httpmock.GraphQL(`query GetPullRequestFullDatabaseID\b`), "api.github.com"),
-					httpmock.GraphQLQuery(`{"data": {"repository": {"pullRequest": {"fullDatabaseId": "999", "url": "some-url"}}}}`, func(s string, m map[string]interface{}) {
+					httpmock.GraphQLQuery(`{"data": {"repository": {"pullRequest": {"fullDatabaseId": "999", "url": "some-url"}}}}`, func(s string, m map[string]any) {
 						assert.Equal(t, "OWNER", m["owner"])
 						assert.Equal(t, "REPO", m["repo"])
 						assert.Equal(t, float64(42), m["number"])
@@ -1900,8 +1895,7 @@ func TestGetPullRequestDatabaseID(t *testing.T) {
 
 			httpClient := &http.Client{Transport: reg}
 
-			cfg := config.NewBlankConfig()
-			capiClient := NewCAPIClient(httpClient, cfg.Authentication())
+			capiClient := NewCAPIClient(httpClient, "", "github.com", "https://api.githubcopilot.com")
 
 			databaseID, url, err := capiClient.GetPullRequestDatabaseID(context.Background(), "github.com", "OWNER", "REPO", 42)
 

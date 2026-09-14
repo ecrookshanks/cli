@@ -1,6 +1,7 @@
 package create
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -8,11 +9,15 @@ import (
 
 	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/cli/v2/api"
+	"github.com/cli/cli/v2/internal/attachments"
 	"github.com/cli/cli/v2/internal/browser"
 	fd "github.com/cli/cli/v2/internal/featuredetection"
 	"github.com/cli/cli/v2/internal/gh"
+	"github.com/cli/cli/v2/internal/gh/ghtelemetry"
 	"github.com/cli/cli/v2/internal/ghrepo"
+	"github.com/cli/cli/v2/internal/prompter"
 	"github.com/cli/cli/v2/internal/text"
+	issueShared "github.com/cli/cli/v2/pkg/cmd/issue/shared"
 	prShared "github.com/cli/cli/v2/pkg/cmd/pr/shared"
 	"github.com/cli/cli/v2/pkg/cmdutil"
 	"github.com/cli/cli/v2/pkg/iostreams"
@@ -46,9 +51,19 @@ type CreateOptions struct {
 	Projects  []string
 	Milestone string
 	Template  string
+
+	IssueType   string
+	issueTypeID string // resolved during interactive flow to avoid double API call
+	Parent      string
+	BlockedBy   []string
+	Blocking    []string
+
+	AttachFlag  *attachments.Flag
+	AttachEvent *attachments.TelemetryEvent
+	Assets      []attachments.UserAsset
 }
 
-func NewCmdCreate(f *cmdutil.Factory, runF func(*CreateOptions) error) *cobra.Command {
+func NewCmdCreate(f *cmdutil.Factory, telemetry ghtelemetry.InvocationRecorder, runF func(*CreateOptions) error) *cobra.Command {
 	opts := &CreateOptions{
 		IO:         f.IOStreams,
 		HttpClient: f.HttpClient,
@@ -67,6 +82,20 @@ func NewCmdCreate(f *cmdutil.Factory, runF func(*CreateOptions) error) *cobra.Co
 		Long: heredoc.Docf(`
 			Create an issue on GitHub.
 
+			Use %[1]s--attach%[1]s to upload an image or video. The attachment is appended to the
+			body. If the body references an attached file, such as %[1]s![alt](./login.png)%[1]s, that
+			reference is rewritten to point at the uploaded asset instead.
+			You can attach up to 50 files per command.
+
+			Alt text for an image follows the path after %[1]s#%[1]s, as in
+			%[1]s--attach './login.png#The login error state'%[1]s. Without it the filename is used.
+			A reference already in the body keeps the alt text written there. Video renders
+			as a player and has no alt text, so it cannot be given any.
+
+			If some attachments upload and others fail, the issue is still created with the
+			ones that succeeded. The command then exits with a non-zero status, but the new
+			issue's URL is still printed to stdout.
+
 			Adding an issue to projects requires authorization with the %[1]sproject%[1]s scope.
 			To authorize, run %[1]sgh auth refresh -s project%[1]s.
 
@@ -76,6 +105,8 @@ func NewCmdCreate(f *cmdutil.Factory, runF func(*CreateOptions) error) *cobra.Co
 		`, "`"),
 		Example: heredoc.Doc(`
 			$ gh issue create --title "I found a bug" --body "Nothing works"
+			$ gh issue create --attach './login.png#The login error state'
+			$ gh issue create --attach ./before.png --attach ./after.png
 			$ gh issue create --label "bug,help wanted"
 			$ gh issue create --label bug --label "help wanted"
 			$ gh issue create --assignee monalisa,hubot
@@ -83,6 +114,10 @@ func NewCmdCreate(f *cmdutil.Factory, runF func(*CreateOptions) error) *cobra.Co
 			$ gh issue create --assignee "@copilot"
 			$ gh issue create --project "Roadmap"
 			$ gh issue create --template "Bug Report"
+			$ gh issue create --type Bug
+			$ gh issue create --parent 100
+			$ gh issue create --parent https://github.com/cli/go-gh/issues/42
+			$ gh issue create --blocked-by 200,201 --blocking 300
 		`),
 		Args:    cmdutil.NoArgsQuoteReminder,
 		Aliases: []string{"new"},
@@ -122,6 +157,20 @@ func NewCmdCreate(f *cmdutil.Factory, runF func(*CreateOptions) error) *cobra.Co
 				return cmdutil.FlagErrorf("must provide `--title` and `--body` when not running interactively")
 			}
 
+			if err := cmdutil.MutuallyExclusive(
+				"`--attach` is not supported when using `--web`",
+				opts.AttachFlag.Changed(),
+				opts.WebMode,
+			); err != nil {
+				return err
+			}
+
+			opts.AttachEvent = attachments.BeginTelemetry(telemetry, cmd.CommandPath(), opts.AttachFlag.Count())
+			opts.Assets, err = opts.AttachFlag.UserAssets()
+			if err != nil {
+				return err
+			}
+
 			if runF != nil {
 				return runF(opts)
 			}
@@ -140,6 +189,11 @@ func NewCmdCreate(f *cmdutil.Factory, runF func(*CreateOptions) error) *cobra.Co
 	cmd.Flags().StringVarP(&opts.Milestone, "milestone", "m", "", "Add the issue to a milestone by `name`")
 	cmd.Flags().StringVar(&opts.RecoverFile, "recover", "", "Recover input from a failed run of create")
 	cmd.Flags().StringVarP(&opts.Template, "template", "T", "", "Template `name` to use as starting body text")
+	cmd.Flags().StringVar(&opts.IssueType, "type", "", "Set the issue type by `name`")
+	cmd.Flags().StringVar(&opts.Parent, "parent", "", "Add the new issue as a sub-issue of the specified parent `number` or URL")
+	cmd.Flags().StringSliceVar(&opts.BlockedBy, "blocked-by", nil, "Mark the new issue as blocked by these issue `numbers` or URLs")
+	cmd.Flags().StringSliceVar(&opts.Blocking, "blocking", nil, "Mark the new issue as blocking these issue `numbers` or URLs")
+	opts.AttachFlag = attachments.AddFlag(cmd)
 
 	return cmd
 }
@@ -178,28 +232,23 @@ func createRun(opts *CreateOptions) (err error) {
 
 	// Replace special values in assignees
 	// For web mode, @copilot should be replaced by name; otherwise, login.
-	assigneeSet := set.NewStringSet()
-	meReplacer := prShared.NewMeReplacer(apiClient, baseRepo.RepoHost())
-	copilotReplacer := prShared.NewCopilotReplacer(!opts.WebMode)
-	assignees, err := meReplacer.ReplaceSlice(opts.Assignees)
+	assigneeReplacer := prShared.NewSpecialAssigneeReplacer(apiClient, baseRepo.RepoHost(), issueFeatures.ApiActorsSupported, !opts.WebMode)
+	assignees, err := assigneeReplacer.ReplaceSlice(opts.Assignees)
 	if err != nil {
 		return err
 	}
-
-	if issueFeatures.ActorIsAssignable {
-		assignees = copilotReplacer.ReplaceSlice(assignees)
-	}
+	assigneeSet := set.NewStringSet()
 	assigneeSet.AddValues(assignees)
 
 	tb := prShared.IssueMetadataState{
-		Type:           prShared.IssueMetadata,
-		ActorAssignees: issueFeatures.ActorIsAssignable,
-		Assignees:      assigneeSet.ToSlice(),
-		Labels:         opts.Labels,
-		ProjectTitles:  opts.Projects,
-		Milestones:     milestones,
-		Title:          opts.Title,
-		Body:           opts.Body,
+		Type:               prShared.IssueMetadata,
+		ApiActorsSupported: issueFeatures.ApiActorsSupported, // TODO ApiActorsSupported
+		Assignees:          assigneeSet.ToSlice(),
+		Labels:             opts.Labels,
+		ProjectTitles:      opts.Projects,
+		Milestones:         milestones,
+		Title:              opts.Title,
+		Body:               opts.Body,
 	}
 
 	if opts.RecoverFile != "" {
@@ -238,13 +287,30 @@ func createRun(opts *CreateOptions) (err error) {
 		fmt.Fprintf(opts.IO.ErrOut, "\nCreating issue in %s\n\n", ghrepo.FullName(baseRepo))
 	}
 
-	repo, err := api.GitHubRepo(apiClient, baseRepo)
+	repo, err := api.IssueRepoInfo(apiClient, baseRepo)
 	if err != nil {
 		return
 	}
 	if !repo.HasIssuesEnabled {
 		err = fmt.Errorf("the '%s' repository has disabled issues", ghrepo.FullName(baseRepo))
 		return
+	}
+
+	// Built before the first survey, so a run that cannot upload stops early.
+	var uploader *attachments.Uploader
+	if len(opts.Assets) > 0 {
+		var cfg gh.Config
+		cfg, err = opts.Config()
+		if err != nil {
+			return
+		}
+		host := baseRepo.RepoHost()
+		tokenType := cfg.Authentication().ActiveTokenType(host)
+
+		uploader, err = attachments.NewUploader(httpClient, tokenType, host, repo.DatabaseID, repo.ViewerPermission)
+		if err != nil {
+			return
+		}
 	}
 
 	action := prShared.SubmitAction
@@ -293,12 +359,31 @@ func createRun(opts *CreateOptions) (err error) {
 			}
 		}
 
+		// Interactive issue type selection
+		if opts.IssueType == "" {
+			issueTypes, typesErr := api.RepoIssueTypes(apiClient, baseRepo)
+			if typesErr == nil && len(issueTypes) > 0 {
+				typeNames := make([]string, len(issueTypes))
+				for i, t := range issueTypes {
+					typeNames[i] = t.Name
+				}
+				var selected int
+				selected, err = opts.Prompter.Select("Issue type", "", typeNames)
+				if err != nil {
+					return
+				}
+				opts.IssueType = typeNames[selected]
+				opts.issueTypeID = issueTypes[selected].ID
+			}
+		}
+
 		openURL, err = generatePreviewURL(apiClient, baseRepo, tb, projectsV1Support)
 		if err != nil {
 			return
 		}
 
-		allowPreview := !tb.HasMetadata() && prShared.ValidURL(openURL)
+		// Preview opens the browser, which cannot carry an upload.
+		allowPreview := !tb.HasMetadata() && prShared.ValidURL(openURL) && len(opts.Assets) == 0
 		action, err = prShared.ConfirmIssueSubmission(opts.Prompter, allowPreview, repo.ViewerCanTriage())
 		if err != nil {
 			err = fmt.Errorf("unable to confirm: %w", err)
@@ -312,12 +397,16 @@ func createRun(opts *CreateOptions) (err error) {
 				Repo:      baseRepo,
 				State:     &tb,
 			}
-			err = prShared.MetadataSurvey(opts.Prompter, opts.IO, baseRepo, fetcher, &tb, projectsV1Support)
+			var assigneeSearchFunc func(string) prompter.MultiSelectSearchResult
+			if issueFeatures.ApiActorsSupported {
+				assigneeSearchFunc = prShared.RepoAssigneeSearchFunc(apiClient, baseRepo)
+			}
+			err = prShared.MetadataSurvey(opts.Prompter, opts.IO, baseRepo, fetcher, &tb, projectsV1Support, nil, assigneeSearchFunc)
 			if err != nil {
 				return
 			}
 
-			action, err = prShared.ConfirmIssueSubmission(opts.Prompter, !tb.HasMetadata(), false)
+			action, err = prShared.ConfirmIssueSubmission(opts.Prompter, !tb.HasMetadata() && len(opts.Assets) == 0, false)
 			if err != nil {
 				return
 			}
@@ -360,7 +449,7 @@ func createRun(opts *CreateOptions) (err error) {
 		}
 		return opts.Browser.Browse(openURL)
 	} else if action == prShared.SubmitAction {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"title": tb.Title,
 			"body":  tb.Body,
 		}
@@ -373,9 +462,34 @@ func createRun(opts *CreateOptions) (err error) {
 			return
 		}
 
+		// With nothing uploaded the body would promise an attachment that does
+		// not exist, so no issue is created. Once anything has uploaded the
+		// issue is created and the failures are reported.
+		if uploader != nil {
+			body, uploadResult, uploadErr := uploader.UploadAndAttach(context.Background(), tb.Body, opts.Assets)
+			opts.AttachEvent.RecordOperations(uploadResult)
+			if uploadErr != nil && uploadResult.Uploaded == 0 {
+				err = uploadErr
+				return
+			}
+			params["body"] = body
+			if uploadErr != nil {
+				defer func() { err = errors.Join(uploadErr, err) }()
+			}
+		}
+
 		var newIssue *api.Issue
 		newIssue, err = api.IssueCreate(apiClient, repo, params)
 		if err != nil {
+			return
+		}
+
+		var updateOpts api.DeferredUpdateIssueOptions
+		updateOpts, err = deferredUpdateIssueOptions(apiClient, baseRepo, newIssue, opts)
+		if err != nil {
+			return
+		}
+		if err = api.DeferredUpdateIssue(apiClient, updateOpts); err != nil {
 			return
 		}
 
@@ -390,4 +504,52 @@ func createRun(opts *CreateOptions) (err error) {
 func generatePreviewURL(apiClient *api.Client, baseRepo ghrepo.Interface, tb prShared.IssueMetadataState, projectsV1Support gh.ProjectsV1Support) (string, error) {
 	openURL := ghrepo.GenerateRepoURL(baseRepo, "issues/new")
 	return prShared.WithPrAndIssueQueryParams(apiClient, baseRepo, openURL, tb, projectsV1Support)
+}
+
+// deferredUpdateIssueOptions resolves the user-supplied --type / --parent /
+// --blocked-by / --blocking flags into the IDs that DeferredUpdateIssue
+// expects.
+func deferredUpdateIssueOptions(client *api.Client, baseRepo ghrepo.Interface, issue *api.Issue, opts *CreateOptions) (api.DeferredUpdateIssueOptions, error) {
+	updateOpts := api.DeferredUpdateIssueOptions{
+		IssueID:  issue.ID,
+		Hostname: baseRepo.RepoHost(),
+	}
+
+	if opts.IssueType != "" {
+		typeID := opts.issueTypeID
+		if typeID == "" {
+			var err error
+			typeID, err = issueShared.ResolveIssueTypeName(client, baseRepo, opts.IssueType)
+			if err != nil {
+				return api.DeferredUpdateIssueOptions{}, err
+			}
+		}
+		updateOpts.IssueTypeID = typeID
+	}
+
+	if opts.Parent != "" {
+		parentID, err := issueShared.ResolveIssueRef(client, baseRepo, opts.Parent)
+		if err != nil {
+			return api.DeferredUpdateIssueOptions{}, fmt.Errorf("resolving --parent reference %q: %w", opts.Parent, err)
+		}
+		updateOpts.ParentID = parentID
+	}
+
+	for _, ref := range opts.BlockedBy {
+		id, err := issueShared.ResolveIssueRef(client, baseRepo, ref)
+		if err != nil {
+			return api.DeferredUpdateIssueOptions{}, fmt.Errorf("resolving --blocked-by reference %q: %w", ref, err)
+		}
+		updateOpts.AddBlockedByIDs = append(updateOpts.AddBlockedByIDs, id)
+	}
+
+	for _, ref := range opts.Blocking {
+		id, err := issueShared.ResolveIssueRef(client, baseRepo, ref)
+		if err != nil {
+			return api.DeferredUpdateIssueOptions{}, fmt.Errorf("resolving --blocking reference %q: %w", ref, err)
+		}
+		updateOpts.AddBlockingIDs = append(updateOpts.AddBlockingIDs, id)
+	}
+
+	return updateOpts, nil
 }

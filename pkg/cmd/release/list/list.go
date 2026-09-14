@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/cli/cli/v2/api"
+	fd "github.com/cli/cli/v2/internal/featuredetection"
 	"github.com/cli/cli/v2/internal/ghrepo"
 	"github.com/cli/cli/v2/internal/tableprinter"
 	"github.com/cli/cli/v2/internal/text"
@@ -19,6 +21,7 @@ type ListOptions struct {
 	BaseRepo   func() (ghrepo.Interface, error)
 
 	Exporter cmdutil.Exporter
+	Detector fd.Detector
 
 	LimitResults       int
 	ExcludeDrafts      bool
@@ -40,6 +43,10 @@ func NewCmdList(f *cmdutil.Factory, runF func(*ListOptions) error) *cobra.Comman
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// support `-R, --repo` override
 			opts.BaseRepo = f.BaseRepo
+
+			if opts.LimitResults < 1 {
+				return cmdutil.FlagErrorf("invalid limit: %v", opts.LimitResults)
+			}
 
 			if runF != nil {
 				return runF(opts)
@@ -68,7 +75,20 @@ func listRun(opts *ListOptions) error {
 		return err
 	}
 
-	releases, err := fetchReleases(httpClient, baseRepo, opts.LimitResults, opts.ExcludeDrafts, opts.ExcludePreReleases, opts.Order)
+	// TODO: immutableReleaseFullSupport
+	// The detector is not needed when covered GHES versions fully support
+	// immutable releases (probably when 3.18 goes EOL).
+	if opts.Detector == nil {
+		cachedClient := api.NewCachedHTTPClient(httpClient, time.Hour*24)
+		opts.Detector = fd.NewDetector(cachedClient, baseRepo.RepoHost())
+	}
+
+	releaseFeatures, err := opts.Detector.ReleaseFeatures()
+	if err != nil {
+		return err
+	}
+
+	releases, err := fetchReleases(httpClient, baseRepo, opts.LimitResults, opts.ExcludeDrafts, opts.ExcludePreReleases, opts.Order, releaseFeatures)
 	if err != nil {
 		return err
 	}

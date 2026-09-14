@@ -26,7 +26,7 @@ func Default() string {
 // reports whether it found the tenant name.
 func TenantName(h string) (string, bool) {
 	normalizedHostName := ghauth.NormalizeHostname(h)
-	return cutSuffix(normalizedHostName, "."+tenancyHost)
+	return strings.CutSuffix(normalizedHostName, "."+tenancyHost)
 }
 
 func isGarage(h string) bool {
@@ -90,6 +90,15 @@ func GistHost(hostname string) string {
 	return fmt.Sprintf("gist.%s/", hostname)
 }
 
+// UserAssetUploadPrefix returns the URL prefix for user asset uploads.
+// GHES does not support this endpoint.
+func UserAssetUploadPrefix(hostname string) string {
+	if strings.EqualFold(hostname, localhost) {
+		return fmt.Sprintf("http://uploads.%s/", hostname)
+	}
+	return fmt.Sprintf("https://uploads.%s/", hostname)
+}
+
 func HostPrefix(hostname string) string {
 	if strings.EqualFold(hostname, localhost) {
 		return fmt.Sprintf("http://%s/", hostname)
@@ -97,10 +106,18 @@ func HostPrefix(hostname string) string {
 	return fmt.Sprintf("https://%s/", hostname)
 }
 
-// Backport strings.CutSuffix from Go 1.20.
-func cutSuffix(s, suffix string) (string, bool) {
-	if !strings.HasSuffix(s, suffix) {
-		return s, false
+func CategorizeHost(host string) string {
+	if host == defaultHostname {
+		return "github.com"
 	}
-	return s[:len(s)-len(suffix)], true
+
+	if ghauth.IsEnterprise(host) {
+		return "ghes"
+	}
+
+	if ghauth.IsTenancy(host) {
+		return "tenancy"
+	}
+
+	return "uncategorized"
 }

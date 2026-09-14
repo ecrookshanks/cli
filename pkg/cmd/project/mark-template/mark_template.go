@@ -29,12 +29,12 @@ type markTemplateConfig struct {
 
 type markProjectTemplateMutation struct {
 	TemplateProject struct {
-		Project queries.Project `graphql:"projectV2"`
+		Project queries.ProjectMutationQuery `graphql:"projectV2"`
 	} `graphql:"markProjectV2AsTemplate(input:$input)"`
 }
 type unmarkProjectTemplateMutation struct {
 	TemplateProject struct {
-		Project queries.Project `graphql:"projectV2"`
+		Project queries.ProjectMutationQuery `graphql:"projectV2"`
 	} `graphql:"unmarkProjectV2AsTemplate(input:$input)"`
 }
 
@@ -126,8 +126,8 @@ func runMarkTemplate(config markTemplateConfig) error {
 	return printResults(config, query.TemplateProject.Project)
 }
 
-func markTemplateArgs(config markTemplateConfig) (*markProjectTemplateMutation, map[string]interface{}) {
-	return &markProjectTemplateMutation{}, map[string]interface{}{
+func markTemplateArgs(config markTemplateConfig) (*markProjectTemplateMutation, map[string]any) {
+	return &markProjectTemplateMutation{}, map[string]any{
 		"input": githubv4.MarkProjectV2AsTemplateInput{
 			ProjectID: githubv4.ID(config.opts.projectID),
 		},
@@ -138,8 +138,8 @@ func markTemplateArgs(config markTemplateConfig) (*markProjectTemplateMutation, 
 	}
 }
 
-func unmarkTemplateArgs(config markTemplateConfig) (*unmarkProjectTemplateMutation, map[string]interface{}) {
-	return &unmarkProjectTemplateMutation{}, map[string]interface{}{
+func unmarkTemplateArgs(config markTemplateConfig) (*unmarkProjectTemplateMutation, map[string]any) {
+	return &unmarkProjectTemplateMutation{}, map[string]any{
 		"input": githubv4.UnmarkProjectV2AsTemplateInput{
 			ProjectID: githubv4.ID(config.opts.projectID),
 		},
@@ -150,7 +150,7 @@ func unmarkTemplateArgs(config markTemplateConfig) (*unmarkProjectTemplateMutati
 	}
 }
 
-func printResults(config markTemplateConfig, project queries.Project) error {
+func printResults(config markTemplateConfig, project queries.ProjectMutationQuery) error {
 	if !config.io.IsStdoutTTY() {
 		return nil
 	}

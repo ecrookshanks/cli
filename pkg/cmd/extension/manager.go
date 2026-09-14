@@ -20,6 +20,7 @@ import (
 	"github.com/cli/cli/v2/internal/config"
 	"github.com/cli/cli/v2/internal/gh"
 	"github.com/cli/cli/v2/internal/ghrepo"
+	"github.com/cli/cli/v2/internal/safeurl"
 	"github.com/cli/cli/v2/pkg/extensions"
 	"github.com/cli/cli/v2/pkg/findsh"
 	"github.com/cli/cli/v2/pkg/iostreams"
@@ -52,10 +53,11 @@ type Manager struct {
 	gitClient  gitClient
 	config     gh.Config
 	io         *iostreams.IOStreams
+	ghPath     string
 	dryRunMode bool
 }
 
-func NewManager(ios *iostreams.IOStreams, gc *git.Client) *Manager {
+func NewManager(ios *iostreams.IOStreams, gc *git.Client, ghPath string) *Manager {
 	return &Manager{
 		dataDir: config.DataDir,
 		updateDir: func() string {
@@ -73,6 +75,7 @@ func NewManager(ios *iostreams.IOStreams, gc *git.Client) *Manager {
 		},
 		io:        ios,
 		gitClient: &gitExecuter{client: gc},
+		ghPath:    ghPath,
 	}
 }
 
@@ -127,6 +130,9 @@ func (m *Manager) Dispatch(args []string, stdin io.Reader, stdout, stderr io.Wri
 		forwardArgs = append([]string{"-c", `command "$@"`, "--", exe}, forwardArgs...)
 		externalCmd = m.newCommand(shExe, forwardArgs...)
 	}
+	// Tell the extension that gh dispatched it and provide a reliable path back to this executable.
+	externalCmd.Env = append(externalCmd.Environ(), "GH_EXTENSION=1", "GH_PATH="+m.ghPath)
+
 	externalCmd.Stdin = stdin
 	externalCmd.Stdout = stdout
 	externalCmd.Stderr = stderr
@@ -268,7 +274,7 @@ func (m *Manager) Install(repo ghrepo.Interface, target string) error {
 		return err
 	}
 	if !hs {
-		return fmt.Errorf("extension is not installable: no usable release artifact or script found in %s", repo)
+		return fmt.Errorf("extension is not installable: no usable release artifact or script found in %s", ghrepo.FullName(repo))
 	}
 
 	return m.installGit(repo, target)
@@ -346,7 +352,7 @@ func (m *Manager) installBin(repo ghrepo.Interface, target string) error {
 	binPath := filepath.Join(targetDir, name)
 	binPath += ext
 
-	err = downloadAsset(m.client, *asset, binPath)
+	err = downloadAsset(m.client, repo.RepoHost(), safeurl.NewImmutableSafeURL(asset.APIURL), binPath)
 	if err != nil {
 		return fmt.Errorf("failed to download asset %s: %w", asset.Name, err)
 	}

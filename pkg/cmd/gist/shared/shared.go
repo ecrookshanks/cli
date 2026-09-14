@@ -3,6 +3,7 @@ package shared
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/cli/cli/v2/api"
 	"github.com/cli/cli/v2/internal/prompter"
+	"github.com/cli/cli/v2/internal/safeurl"
 	"github.com/cli/cli/v2/internal/text"
 	"github.com/cli/cli/v2/pkg/iostreams"
 	"github.com/gabriel-vasile/mimetype"
@@ -19,10 +21,12 @@ import (
 )
 
 type GistFile struct {
-	Filename string `json:"filename,omitempty"`
-	Type     string `json:"type,omitempty"`
-	Language string `json:"language,omitempty"`
-	Content  string `json:"content"`
+	Filename  string `json:"filename,omitempty"`
+	Type      string `json:"type,omitempty"`
+	Language  string `json:"language,omitempty"`
+	Content   string `json:"content"`
+	RawURL    string `json:"raw_url,omitempty"`
+	Truncated bool   `json:"truncated,omitempty"`
 }
 
 type GistOwner struct {
@@ -59,10 +63,13 @@ var NotFoundErr = errors.New("not found")
 
 func GetGist(client *http.Client, hostname, gistID string) (*Gist, error) {
 	gist := Gist{}
-	path := fmt.Sprintf("gists/%s", gistID)
+	path, err := safeurl.JoinPath("gists", gistID)
+	if err != nil {
+		return nil, err
+	}
 
 	apiClient := api.NewClientFromHTTP(client)
-	err := apiClient.REST(hostname, "GET", path, nil, &gist)
+	err = apiClient.REST(hostname, "GET", path.String(), nil, &gist)
 	if err != nil {
 		var httpErr api.HTTPError
 		if errors.As(err, &httpErr) && httpErr.StatusCode == 404 {
@@ -115,12 +122,9 @@ func ListGists(client *http.Client, hostname string, limit int, filter *regexp.R
 		}
 	}
 
-	perPage := limit
-	if perPage > maxPerPage {
-		perPage = maxPerPage
-	}
+	perPage := min(limit, maxPerPage)
 
-	variables := map[string]interface{}{
+	variables := map[string]any{
 		"per_page":       githubv4.Int(perPage),
 		"endCursor":      (*githubv4.String)(nil),
 		"visibility":     githubv4.GistPrivacy(strings.ToUpper(visibility)),
@@ -243,4 +247,33 @@ func PromptGists(prompter prompter.Prompter, client *http.Client, host string, c
 	}
 
 	return &gists[result], nil
+}
+
+// GetRawGistFile fetches the full content of a gist file from its raw URL. The
+// bytes are external content, so they are returned as iostreams.Untrusted to
+// force callers to choose between sanitized display and raw round-tripping.
+// The rawURL is supplied by the API and points at gist.githubusercontent.com rather than the
+// API host, so it is requested as an absolute URL. The hostname only configures the client.
+func GetRawGistFile(httpClient *http.Client, hostname string, rawURL safeurl.SafeURL) (iostreams.Untrusted, error) {
+	// TODO(api-client-rollout)
+	// This line of code is part of a mechanical roll out of the api client.
+	// As a follow up, consider whether the api client can be injected to this call site, rather than constructed
+	resp, err := api.NewClientFromHTTP(httpClient).Request(hostname, http.MethodGet, rawURL.String(), nil)
+	if err != nil {
+		return iostreams.Untrusted{}, err
+	}
+
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return iostreams.Untrusted{}, api.UnexpectedStatusError(resp)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+
+	if err != nil {
+		return iostreams.Untrusted{}, err
+	}
+
+	return iostreams.NewUntrustedBytes(body), nil
 }

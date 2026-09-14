@@ -32,7 +32,7 @@ type copyConfig struct {
 
 type copyProjectMutation struct {
 	CopyProjectV2 struct {
-		ProjectV2 queries.Project `graphql:"projectV2"`
+		ProjectV2 queries.ProjectMutationQuery `graphql:"projectV2"`
 	} `graphql:"copyProjectV2(input:$input)"`
 }
 
@@ -119,13 +119,13 @@ func runCopy(config copyConfig) error {
 	return printResults(config, query.CopyProjectV2.ProjectV2)
 }
 
-func copyArgs(config copyConfig) (*copyProjectMutation, map[string]interface{}) {
-	return &copyProjectMutation{}, map[string]interface{}{
+func copyArgs(config copyConfig) (*copyProjectMutation, map[string]any) {
+	return &copyProjectMutation{}, map[string]any{
 		"input": githubv4.CopyProjectV2Input{
 			OwnerID:            githubv4.ID(config.opts.ownerID),
 			ProjectID:          githubv4.ID(config.opts.projectID),
 			Title:              githubv4.String(config.opts.title),
-			IncludeDraftIssues: githubv4.NewBoolean(githubv4.Boolean(config.opts.includeDraftIssues)),
+			IncludeDraftIssues: new(githubv4.Boolean(config.opts.includeDraftIssues)),
 		},
 		"firstItems":  githubv4.Int(0),
 		"afterItems":  (*githubv4.String)(nil),
@@ -134,7 +134,7 @@ func copyArgs(config copyConfig) (*copyProjectMutation, map[string]interface{}) 
 	}
 }
 
-func printResults(config copyConfig, project queries.Project) error {
+func printResults(config copyConfig, project queries.ProjectMutationQuery) error {
 	if !config.io.IsStdoutTTY() {
 		return nil
 	}

@@ -20,14 +20,13 @@ func preloadIssueComments(client *http.Client, repo ghrepo.Interface, issue *api
 		} `graphql:"node(id: $id)"`
 	}
 
-	variables := map[string]interface{}{
-		"id":        githubv4.ID(issue.ID),
-		"endCursor": (*githubv4.String)(nil),
+	if !issue.Comments.PageInfo.HasNextPage {
+		return nil
 	}
-	if issue.Comments.PageInfo.HasNextPage {
-		variables["endCursor"] = githubv4.String(issue.Comments.PageInfo.EndCursor)
-	} else {
-		issue.Comments.Nodes = issue.Comments.Nodes[0:0]
+
+	variables := map[string]any{
+		"id":        githubv4.ID(issue.ID),
+		"endCursor": githubv4.String(issue.Comments.PageInfo.EndCursor),
 	}
 
 	gql := api.NewClientFromHTTP(client)
@@ -67,7 +66,7 @@ func preloadClosedByPullRequestsReferences(client *http.Client, repo ghrepo.Inte
 		} `graphql:"node(id: $id)"`
 	}
 
-	variables := map[string]interface{}{
+	variables := map[string]any{
 		"id":        githubv4.ID(issue.ID),
 		"endCursor": githubv4.String(issue.ClosedByPullRequestsReferences.PageInfo.EndCursor),
 	}

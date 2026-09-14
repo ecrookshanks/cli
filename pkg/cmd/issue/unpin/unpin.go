@@ -34,7 +34,7 @@ func NewCmdUnpin(f *cmdutil.Factory, runF func(*UnpinOptions) error) *cobra.Comm
 
 	cmd := &cobra.Command{
 		Use:   "unpin {<number> | <url>}",
-		Short: "Unpin a issue",
+		Short: "Unpin an issue",
 		Long: heredoc.Doc(`
 			Unpin an issue from a repository.
 
@@ -122,7 +122,7 @@ func unpinIssue(httpClient *http.Client, repo ghrepo.Interface, issue *api.Issue
 		} `graphql:"unpinIssue(input: $input)"`
 	}
 
-	variables := map[string]interface{}{
+	variables := map[string]any{
 		"input": githubv4.UnpinIssueInput{
 			IssueID: issue.ID,
 		},

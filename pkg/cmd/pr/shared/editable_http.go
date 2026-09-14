@@ -66,14 +66,15 @@ func UpdateIssue(httpClient *http.Client, repo ghrepo.Interface, id string, isPR
 			// other issue fields to ensure consistency with how legacy
 			// user assignees are handled.
 			// https://github.com/cli/cli/pull/10960#discussion_r2086725348
-			if options.Assignees.Edited && options.Assignees.ActorAssignees {
+			// TODO ApiActorsSupported
+			if options.Assignees.Edited && options.ApiActorsSupported {
 				apiClient := api.NewClientFromHTTP(httpClient)
-				assigneeIds, err := options.AssigneeIds(apiClient, repo)
+				logins, err := options.AssigneeLogins(apiClient, repo)
 				if err != nil {
 					return err
 				}
 
-				err = replaceActorAssigneesForEditable(apiClient, repo, id, assigneeIds)
+				err = api.ReplaceActorsForAssignableByLogin(apiClient, repo, id, logins)
 				if err != nil {
 					return err
 				}
@@ -90,32 +91,6 @@ func UpdateIssue(httpClient *http.Client, repo ghrepo.Interface, id string, isPR
 	return wg.Wait()
 }
 
-func replaceActorAssigneesForEditable(apiClient *api.Client, repo ghrepo.Interface, id string, assigneeIds *[]string) error {
-	type ReplaceActorsForAssignableInput struct {
-		AssignableID githubv4.ID   `json:"assignableId"`
-		ActorIDs     []githubv4.ID `json:"actorIds"`
-	}
-
-	params := ReplaceActorsForAssignableInput{
-		AssignableID: githubv4.ID(id),
-		ActorIDs:     *ghIds(assigneeIds),
-	}
-
-	var mutation struct {
-		ReplaceActorsForAssignable struct {
-			TypeName string `graphql:"__typename"`
-		} `graphql:"replaceActorsForAssignable(input: $input)"`
-	}
-
-	variables := map[string]interface{}{"input": params}
-	err := apiClient.Mutate(repo.RepoHost(), "ReplaceActorsForAssignable", &mutation, variables)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
 func replaceIssueFields(httpClient *http.Client, repo ghrepo.Interface, id string, isPR bool, options Editable) error {
 	apiClient := api.NewClientFromHTTP(httpClient)
 
@@ -125,7 +100,8 @@ func replaceIssueFields(httpClient *http.Client, repo ghrepo.Interface, id strin
 	}
 
 	var assigneeIds *[]string
-	if !options.Assignees.ActorAssignees {
+	// TODO ApiActorsSupported
+	if !options.ApiActorsSupported {
 		assigneeIds, err = options.AssigneeIds(apiClient, repo)
 		if err != nil {
 			return err
@@ -185,7 +161,7 @@ func addLabels(httpClient *http.Client, id string, repo ghrepo.Interface, labels
 		} `graphql:"addLabelsToLabelable(input: $input)"`
 	}
 
-	variables := map[string]interface{}{"input": params}
+	variables := map[string]any{"input": params}
 	gql := api.NewClientFromHTTP(httpClient)
 	return gql.Mutate(repo.RepoHost(), "LabelAdd", &mutation, variables)
 }
@@ -202,7 +178,7 @@ func removeLabels(httpClient *http.Client, id string, repo ghrepo.Interface, lab
 		} `graphql:"removeLabelsFromLabelable(input: $input)"`
 	}
 
-	variables := map[string]interface{}{"input": params}
+	variables := map[string]any{"input": params}
 	gql := api.NewClientFromHTTP(httpClient)
 	return gql.Mutate(repo.RepoHost(), "LabelRemove", &mutation, variables)
 }
@@ -213,7 +189,7 @@ func updateIssue(httpClient *http.Client, repo ghrepo.Interface, params githubv4
 			Typename string `graphql:"__typename"`
 		} `graphql:"updateIssue(input: $input)"`
 	}
-	variables := map[string]interface{}{"input": params}
+	variables := map[string]any{"input": params}
 	gql := api.NewClientFromHTTP(httpClient)
 	return gql.Mutate(repo.RepoHost(), "IssueUpdate", &mutation, variables)
 }
@@ -224,7 +200,7 @@ func updatePullRequest(httpClient *http.Client, repo ghrepo.Interface, params gi
 			Typename string `graphql:"__typename"`
 		} `graphql:"updatePullRequest(input: $input)"`
 	}
-	variables := map[string]interface{}{"input": params}
+	variables := map[string]any{"input": params}
 	gql := api.NewClientFromHTTP(httpClient)
 	err := gql.Mutate(repo.RepoHost(), "PullRequestUpdate", &mutation, variables)
 	return err

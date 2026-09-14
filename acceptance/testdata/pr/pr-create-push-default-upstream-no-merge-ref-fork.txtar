@@ -1,5 +1,9 @@
+# requires-user-capability: true
+
 skip 'it creates a fork owned by the user running the test'
 skip 'this never worked, but could be fixed if we fixed show-refs'
+
+fixture-repo none
 
 # Setup environment variables used for testscript
 env REPO=${SCRIPT_NAME}-${RANDOM_STRING}
@@ -47,4 +51,4 @@ stdout https://${GH_HOST}/${ORG}/${REPO}/pull/1
 
 # Assert that the PR was created with the correct head repository and refs
 exec gh pr view --json headRefName,headRepository,baseRefName,isCrossRepository
-stdout {"baseRefName":"main","headRefName":"feature-branch","headRepository":{"id":"${FORK_ID}","name":"${FORK}"},"isCrossRepository":true}
+stdout {"baseRefName":"main","headRefName":"feature-branch","headRepository":{"id":"${FORK_ID}","name":"${FORK}","nameWithOwner":"${USER}/${FORK}"},"isCrossRepository":true}
